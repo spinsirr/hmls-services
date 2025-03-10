@@ -1,0 +1,5 @@
+# Server
+uvicorn==0.27.1
+
+# Additional dependencies specific to Auth Service
+# (common dependencies are in common/requirements.txt) 
