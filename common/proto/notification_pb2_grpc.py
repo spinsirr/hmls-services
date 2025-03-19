@@ -24,6 +24,11 @@ class NotificationServiceStub(object):
                 request_serializer=common_dot_proto_dot_notification__pb2.TokenRequest.SerializeToString,
                 response_deserializer=common_dot_proto_dot_notification__pb2.NotificationsResponse.FromString,
                 )
+        self.HealthCheck = channel.unary_unary(
+                '/notification.NotificationService/HealthCheck',
+                request_serializer=common_dot_proto_dot_notification__pb2.HealthCheckRequest.SerializeToString,
+                response_deserializer=common_dot_proto_dot_notification__pb2.HealthCheckResponse.FromString,
+                )
 
 
 class NotificationServiceServicer(object):
@@ -41,6 +46,12 @@ class NotificationServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def HealthCheck(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_NotificationServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -53,6 +64,11 @@ def add_NotificationServiceServicer_to_server(servicer, server):
                     servicer.GetNotifications,
                     request_deserializer=common_dot_proto_dot_notification__pb2.TokenRequest.FromString,
                     response_serializer=common_dot_proto_dot_notification__pb2.NotificationsResponse.SerializeToString,
+            ),
+            'HealthCheck': grpc.unary_unary_rpc_method_handler(
+                    servicer.HealthCheck,
+                    request_deserializer=common_dot_proto_dot_notification__pb2.HealthCheckRequest.FromString,
+                    response_serializer=common_dot_proto_dot_notification__pb2.HealthCheckResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -95,5 +111,22 @@ class NotificationService(object):
         return grpc.experimental.unary_unary(request, target, '/notification.NotificationService/GetNotifications',
             common_dot_proto_dot_notification__pb2.TokenRequest.SerializeToString,
             common_dot_proto_dot_notification__pb2.NotificationsResponse.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def HealthCheck(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/notification.NotificationService/HealthCheck',
+            common_dot_proto_dot_notification__pb2.HealthCheckRequest.SerializeToString,
+            common_dot_proto_dot_notification__pb2.HealthCheckResponse.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)

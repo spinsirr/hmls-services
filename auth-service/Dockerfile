@@ -13,8 +13,8 @@ RUN pip install --no-cache-dir -r requirements.txt -r common-requirements.txt
 COPY hmls-services/auth-service/ .
 COPY hmls-services/common/ ./common/
 
-# Expose port
-EXPOSE 8001
+# Expose gRPC port
+EXPOSE 50051
 
 # Command to run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"] 
+CMD ["python", "main.py"] 

@@ -6,6 +6,7 @@ service AuthService {
   rpc Register(RegisterRequest) returns (UserResponse);
   rpc Login(LoginRequest) returns (TokenResponse);
   rpc GetCurrentUser(TokenRequest) returns (UserResponse);
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
 }
 
 message RegisterRequest {
@@ -36,4 +37,12 @@ message UserResponse {
   bool is_admin = 5;
   string created_at = 6;
   string updated_at = 7;
+}
+
+message HealthCheckRequest {
+}
+
+message HealthCheckResponse {
+  string status = 1;
+  string service = 2;
 } 

@@ -8,6 +8,7 @@ service AppointmentService {
   rpc GetAppointment(AppointmentIdRequest) returns (AppointmentResponse);
   rpc UpdateAppointment(UpdateAppointmentRequest) returns (AppointmentResponse);
   rpc DeleteAppointment(AppointmentIdRequest) returns (StatusResponse);
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
 }
 
 message TokenRequest {
@@ -64,4 +65,12 @@ message AppointmentsResponse {
 message StatusResponse {
   bool success = 1;
   string message = 2;
+}
+
+message HealthCheckRequest {
+}
+
+message HealthCheckResponse {
+  string status = 1;
+  string service = 2;
 } 

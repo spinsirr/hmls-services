@@ -39,6 +39,11 @@ class AppointmentServiceStub(object):
                 request_serializer=common_dot_proto_dot_appointment__pb2.AppointmentIdRequest.SerializeToString,
                 response_deserializer=common_dot_proto_dot_appointment__pb2.StatusResponse.FromString,
                 )
+        self.HealthCheck = channel.unary_unary(
+                '/appointment.AppointmentService/HealthCheck',
+                request_serializer=common_dot_proto_dot_appointment__pb2.HealthCheckRequest.SerializeToString,
+                response_deserializer=common_dot_proto_dot_appointment__pb2.HealthCheckResponse.FromString,
+                )
 
 
 class AppointmentServiceServicer(object):
@@ -74,6 +79,12 @@ class AppointmentServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def HealthCheck(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_AppointmentServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -101,6 +112,11 @@ def add_AppointmentServiceServicer_to_server(servicer, server):
                     servicer.DeleteAppointment,
                     request_deserializer=common_dot_proto_dot_appointment__pb2.AppointmentIdRequest.FromString,
                     response_serializer=common_dot_proto_dot_appointment__pb2.StatusResponse.SerializeToString,
+            ),
+            'HealthCheck': grpc.unary_unary_rpc_method_handler(
+                    servicer.HealthCheck,
+                    request_deserializer=common_dot_proto_dot_appointment__pb2.HealthCheckRequest.FromString,
+                    response_serializer=common_dot_proto_dot_appointment__pb2.HealthCheckResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -194,5 +210,22 @@ class AppointmentService(object):
         return grpc.experimental.unary_unary(request, target, '/appointment.AppointmentService/DeleteAppointment',
             common_dot_proto_dot_appointment__pb2.AppointmentIdRequest.SerializeToString,
             common_dot_proto_dot_appointment__pb2.StatusResponse.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def HealthCheck(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/appointment.AppointmentService/HealthCheck',
+            common_dot_proto_dot_appointment__pb2.HealthCheckRequest.SerializeToString,
+            common_dot_proto_dot_appointment__pb2.HealthCheckResponse.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)

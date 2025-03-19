@@ -5,6 +5,7 @@ package notification;
 service NotificationService {
   rpc SendNotification(NotificationRequest) returns (NotificationResponse);
   rpc GetNotifications(TokenRequest) returns (NotificationsResponse);
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
 }
 
 message TokenRequest {
@@ -34,4 +35,12 @@ message NotificationResponse {
 
 message NotificationsResponse {
   repeated NotificationResponse notifications = 1;
+}
+
+message HealthCheckRequest {
+}
+
+message HealthCheckResponse {
+  string status = 1;
+  string service = 2;
 } 

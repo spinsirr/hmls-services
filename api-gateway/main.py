@@ -72,7 +72,41 @@ def get_token_from_header(request: Request) -> str:
 # Health check endpoint
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "service": settings.SERVICE_NAME}
+    # Check if all required services are healthy
+    try:
+        auth_health = auth_client.health_check()
+        appointment_health = appointment_client.health_check()
+        notification_health = notification_client.health_check()
+        
+        all_healthy = (
+            auth_health.status == "healthy" and
+            appointment_health.status == "healthy" and
+            notification_health.status == "healthy"
+        )
+        
+        services_status = {
+            "auth_service": auth_health.status,
+            "appointment_service": appointment_health.status,
+            "notification_service": notification_health.status,
+        }
+        
+        status_code = status.HTTP_200_OK if all_healthy else status.HTTP_503_SERVICE_UNAVAILABLE
+        
+        return {
+            "status": "healthy" if all_healthy else "unhealthy",
+            "service": settings.SERVICE_NAME,
+            "services": services_status
+        }
+    except Exception as e:
+        logger.error(f"Health check error: {str(e)}")
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "status": "unhealthy",
+                "service": settings.SERVICE_NAME,
+                "error": str(e)
+            }
+        )
 
 # Auth service routes
 @app.post("/auth/register")

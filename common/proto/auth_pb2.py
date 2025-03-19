@@ -14,7 +14,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x17\x63ommon/proto/auth.proto\x12\x04\x61uth\"E\n\x0fRegisterRequest\x12\r\n\x05\x65mail\x18\x01 \x01(\t\x12\x10\n\x08password\x18\x02 \x01(\t\x12\x11\n\tfull_name\x18\x03 \x01(\t\"2\n\x0cLoginRequest\x12\x10\n\x08username\x18\x01 \x01(\t\x12\x10\n\x08password\x18\x02 \x01(\t\"\x1d\n\x0cTokenRequest\x12\r\n\x05token\x18\x01 \x01(\t\"9\n\rTokenResponse\x12\x14\n\x0c\x61\x63\x63\x65ss_token\x18\x01 \x01(\t\x12\x12\n\ntoken_type\x18\x02 \x01(\t\"\x89\x01\n\x0cUserResponse\x12\n\n\x02id\x18\x01 \x01(\x05\x12\r\n\x05\x65mail\x18\x02 \x01(\t\x12\x11\n\tfull_name\x18\x03 \x01(\t\x12\x11\n\tis_active\x18\x04 \x01(\x08\x12\x10\n\x08is_admin\x18\x05 \x01(\x08\x12\x12\n\ncreated_at\x18\x06 \x01(\t\x12\x12\n\nupdated_at\x18\x07 \x01(\t2\xb0\x01\n\x0b\x41uthService\x12\x35\n\x08Register\x12\x15.auth.RegisterRequest\x1a\x12.auth.UserResponse\x12\x30\n\x05Login\x12\x12.auth.LoginRequest\x1a\x13.auth.TokenResponse\x12\x38\n\x0eGetCurrentUser\x12\x12.auth.TokenRequest\x1a\x12.auth.UserResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x17\x63ommon/proto/auth.proto\x12\x04\x61uth\"E\n\x0fRegisterRequest\x12\r\n\x05\x65mail\x18\x01 \x01(\t\x12\x10\n\x08password\x18\x02 \x01(\t\x12\x11\n\tfull_name\x18\x03 \x01(\t\"2\n\x0cLoginRequest\x12\x10\n\x08username\x18\x01 \x01(\t\x12\x10\n\x08password\x18\x02 \x01(\t\"\x1d\n\x0cTokenRequest\x12\r\n\x05token\x18\x01 \x01(\t\"9\n\rTokenResponse\x12\x14\n\x0c\x61\x63\x63\x65ss_token\x18\x01 \x01(\t\x12\x12\n\ntoken_type\x18\x02 \x01(\t\"\x89\x01\n\x0cUserResponse\x12\n\n\x02id\x18\x01 \x01(\x05\x12\r\n\x05\x65mail\x18\x02 \x01(\t\x12\x11\n\tfull_name\x18\x03 \x01(\t\x12\x11\n\tis_active\x18\x04 \x01(\x08\x12\x10\n\x08is_admin\x18\x05 \x01(\x08\x12\x12\n\ncreated_at\x18\x06 \x01(\t\x12\x12\n\nupdated_at\x18\x07 \x01(\t\"\x14\n\x12HealthCheckRequest\"6\n\x13HealthCheckResponse\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\x0f\n\x07service\x18\x02 \x01(\t2\xf4\x01\n\x0b\x41uthService\x12\x35\n\x08Register\x12\x15.auth.RegisterRequest\x1a\x12.auth.UserResponse\x12\x30\n\x05Login\x12\x12.auth.LoginRequest\x1a\x13.auth.TokenResponse\x12\x38\n\x0eGetCurrentUser\x12\x12.auth.TokenRequest\x1a\x12.auth.UserResponse\x12\x42\n\x0bHealthCheck\x12\x18.auth.HealthCheckRequest\x1a\x19.auth.HealthCheckResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -31,6 +31,10 @@ if _descriptor._USE_C_DESCRIPTORS == False:
   _globals['_TOKENRESPONSE']._serialized_end=244
   _globals['_USERRESPONSE']._serialized_start=247
   _globals['_USERRESPONSE']._serialized_end=384
-  _globals['_AUTHSERVICE']._serialized_start=387
-  _globals['_AUTHSERVICE']._serialized_end=563
+  _globals['_HEALTHCHECKREQUEST']._serialized_start=386
+  _globals['_HEALTHCHECKREQUEST']._serialized_end=406
+  _globals['_HEALTHCHECKRESPONSE']._serialized_start=408
+  _globals['_HEALTHCHECKRESPONSE']._serialized_end=462
+  _globals['_AUTHSERVICE']._serialized_start=465
+  _globals['_AUTHSERVICE']._serialized_end=709
 # @@protoc_insertion_point(module_scope)

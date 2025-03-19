@@ -52,6 +52,11 @@ class AuthGrpcClient(GrpcClient):
         """Get current user from token"""
         request = auth_pb2.TokenRequest(token=token)
         return self.stub.GetCurrentUser(request)
+        
+    def health_check(self):
+        """Check if the auth service is healthy"""
+        request = auth_pb2.HealthCheckRequest()
+        return self.stub.HealthCheck(request)
 
 class AppointmentGrpcClient(GrpcClient):
     """gRPC client for Appointment Service"""
@@ -112,6 +117,11 @@ class AppointmentGrpcClient(GrpcClient):
             id=appointment_id
         )
         return self.stub.DeleteAppointment(request)
+        
+    def health_check(self):
+        """Check if the appointment service is healthy"""
+        request = appointment_pb2.HealthCheckRequest()
+        return self.stub.HealthCheck(request)
 
 class NotificationGrpcClient(GrpcClient):
     """gRPC client for Notification Service"""
@@ -139,4 +149,9 @@ class NotificationGrpcClient(GrpcClient):
     def get_notifications(self, token: str):
         """Get all notifications"""
         request = notification_pb2.TokenRequest(token=token)
-        return self.stub.GetNotifications(request) 
+        return self.stub.GetNotifications(request)
+        
+    def health_check(self):
+        """Check if the notification service is healthy"""
+        request = notification_pb2.HealthCheckRequest()
+        return self.stub.HealthCheck(request) 
