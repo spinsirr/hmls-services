@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+package appointment;
+
+service AppointmentService {
+  rpc CreateAppointment(AppointmentRequest) returns (AppointmentResponse);
+  rpc GetAppointments(TokenRequest) returns (AppointmentsResponse);
+  rpc GetAppointment(AppointmentIdRequest) returns (AppointmentResponse);
+  rpc UpdateAppointment(UpdateAppointmentRequest) returns (AppointmentResponse);
+  rpc DeleteAppointment(AppointmentIdRequest) returns (StatusResponse);
+}
+
+message TokenRequest {
+  string token = 1;
+}
+
+message AppointmentRequest {
+  string token = 1;
+  string email = 2;
+  string phone_number = 3;
+  string appointment_time = 4;
+  int32 vehicle_year = 5;
+  string vehicle_make = 6;
+  string vehicle_model = 7;
+  string problem_description = 8;
+}
+
+message UpdateAppointmentRequest {
+  string token = 1;
+  int32 id = 2;
+  string email = 3;
+  string phone_number = 4;
+  string appointment_time = 5;
+  int32 vehicle_year = 6;
+  string vehicle_make = 7;
+  string vehicle_model = 8;
+  string problem_description = 9;
+  string status = 10;
+}
+
+message AppointmentIdRequest {
+  string token = 1;
+  int32 id = 2;
+}
+
+message AppointmentResponse {
+  int32 id = 1;
+  string email = 2;
+  string phone_number = 3;
+  string appointment_time = 4;
+  int32 vehicle_year = 5;
+  string vehicle_make = 6;
+  string vehicle_model = 7;
+  string problem_description = 8;
+  string status = 9;
+  string created_at = 10;
+  string updated_at = 11;
+}
+
+message AppointmentsResponse {
+  repeated AppointmentResponse appointments = 1;
+}
+
+message StatusResponse {
+  bool success = 1;
+  string message = 2;
+} 

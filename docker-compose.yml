@@ -10,9 +10,9 @@ services:
       - "8000:8000"
     environment:
       - SERVICE_NAME=api-gateway
-      - AUTH_SERVICE_URL=http://auth-service:8001
-      - APPOINTMENT_SERVICE_URL=http://appointment-service:8002
-      - NOTIFICATION_SERVICE_URL=http://notification-service:8003
+      - AUTH_SERVICE_GRPC_URL=auth-service:50051
+      - APPOINTMENT_SERVICE_GRPC_URL=appointment-service:50052
+      - NOTIFICATION_SERVICE_GRPC_URL=notification-service:50053
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       - auth-service
@@ -30,6 +30,7 @@ services:
       dockerfile: hmls-services/auth-service/Dockerfile
     ports:
       - "8001:8001"
+      - "50051:50051"
     environment:
       - SERVICE_NAME=auth-service
       - DATABASE_URL=postgresql://postgres:postgres@postgres/auth_db
@@ -37,6 +38,7 @@ services:
       - SECRET_KEY=${SECRET_KEY}
       - ALGORITHM=HS256
       - ACCESS_TOKEN_EXPIRE_MINUTES=30
+      - GRPC_PORT=50051
     depends_on:
       - postgres
       - redis
@@ -51,12 +53,14 @@ services:
       dockerfile: hmls-services/appointment-service/Dockerfile
     ports:
       - "8002:8002"
+      - "50052:50052"
     environment:
       - SERVICE_NAME=appointment-service
       - DATABASE_URL=postgresql://postgres:postgres@postgres/appointment_db
       - REDIS_URL=redis://redis:6379/2
-      - AUTH_SERVICE_URL=http://auth-service:8001
-      - NOTIFICATION_SERVICE_URL=http://notification-service:8003
+      - AUTH_SERVICE_GRPC_URL=auth-service:50051
+      - NOTIFICATION_SERVICE_GRPC_URL=notification-service:50053
+      - GRPC_PORT=50052
     depends_on:
       - postgres
       - redis
@@ -72,11 +76,13 @@ services:
       dockerfile: hmls-services/notification-service/Dockerfile
     ports:
       - "8003:8003"
+      - "50053:50053"
     environment:
       - SERVICE_NAME=notification-service
       - REDIS_URL=redis://redis:6379/3
       - DATABASE_URL=postgresql://postgres:postgres@postgres/notification_db
-      - AUTH_SERVICE_URL=http://auth-service:8001
+      - AUTH_SERVICE_GRPC_URL=auth-service:50051
+      - GRPC_PORT=50053
     depends_on:
       - postgres
       - redis

@@ -14,7 +14,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Import common utilities
 from common.utils.config import BaseServiceSettings
 from common.utils import get_settings, init_redis, redis_client, close_redis
-from common.utils import AuthServiceClient, AppointmentServiceClient, NotificationServiceClient
+from common.utils import AuthGrpcClient, AppointmentGrpcClient, NotificationGrpcClient
 
 # Configure settings
 class ApiGatewaySettings(BaseServiceSettings):
@@ -27,9 +27,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("api-gateway")
 
 # Initialize clients
-auth_client = AuthServiceClient()
-appointment_client = AppointmentServiceClient()
-notification_client = NotificationServiceClient()
+auth_client = AuthGrpcClient()
+appointment_client = AppointmentGrpcClient()
+notification_client = NotificationGrpcClient()
 
 # Lifespan context manager
 @asynccontextmanager
@@ -38,8 +38,11 @@ async def lifespan(app: FastAPI):
     await init_redis()
     logger.info(f"{settings.SERVICE_NAME} started")
     yield
-    # Shutdown: Close Redis connection
+    # Shutdown: Close Redis connection and gRPC clients
     await close_redis()
+    auth_client.close()
+    appointment_client.close()
+    notification_client.close()
     logger.info(f"{settings.SERVICE_NAME} shut down")
 
 # Create FastAPI app
@@ -59,6 +62,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Helper function to extract token from request
+def get_token_from_header(request: Request) -> str:
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        return auth_header.replace("Bearer ", "")
+    return ""
+
 # Health check endpoint
 @app.get("/health")
 async def health_check():
@@ -68,76 +78,271 @@ async def health_check():
 @app.post("/auth/register")
 async def register(request: Request):
     data = await request.json()
-    return await auth_client.post("register", data=data)
+    try:
+        response = auth_client.register(
+            email=data.get("email", ""),
+            password=data.get("password", ""),
+            full_name=data.get("full_name", "")
+        )
+        return {
+            "id": response.id,
+            "email": response.email,
+            "full_name": response.full_name,
+            "is_active": response.is_active,
+            "is_admin": response.is_admin,
+            "created_at": response.created_at,
+            "updated_at": response.updated_at
+        }
+    except Exception as e:
+        logger.error(f"Register error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
 
 @app.post("/auth/login")
 async def login(request: Request):
     try:
-        # Get the raw body content and forward it directly
-        body = await request.body()
+        form_data = await request.form()
+        username = form_data.get("username", "")
+        password = form_data.get("password", "")
         
-        # Use httpx directly for more control
-        async with httpx.AsyncClient() as client:
-            auth_response = await client.post(
-                f"{auth_client.base_url}/login",
-                content=body,
-                headers={"Content-Type": "application/x-www-form-urlencoded"}
-            )
-            
-            # Return the response directly
-            return JSONResponse(
-                content=auth_response.json(),
-                status_code=auth_response.status_code
-            )
+        response = auth_client.login(username=username, password=password)
+        
+        return {
+            "access_token": response.access_token,
+            "token_type": response.token_type
+        }
     except Exception as e:
         logger.error(f"Login error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Login failed: {str(e)}")
 
 @app.get("/auth/me")
 async def get_current_user(request: Request):
-    # Forward the authorization header
-    headers = {"Authorization": request.headers.get("Authorization")}
-    return await auth_client.get("me", headers=headers)
+    token = get_token_from_header(request)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    try:
+        response = auth_client.get_current_user(token=token)
+        return {
+            "id": response.id,
+            "email": response.email,
+            "full_name": response.full_name,
+            "is_active": response.is_active,
+            "is_admin": response.is_admin,
+            "created_at": response.created_at,
+            "updated_at": response.updated_at
+        }
+    except Exception as e:
+        logger.error(f"Get current user error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 # Appointment service routes
 @app.post("/appointments")
 async def create_appointment(request: Request):
+    token = get_token_from_header(request)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
     data = await request.json()
-    headers = {"Authorization": request.headers.get("Authorization")}
-    return await appointment_client.post("", data=data, headers=headers)
+    try:
+        response = appointment_client.create_appointment(token=token, data=data)
+        return {
+            "id": response.id,
+            "email": response.email,
+            "phone_number": response.phone_number,
+            "appointment_time": response.appointment_time,
+            "vehicle_year": response.vehicle_year,
+            "vehicle_make": response.vehicle_make,
+            "vehicle_model": response.vehicle_model,
+            "problem_description": response.problem_description,
+            "status": response.status,
+            "created_at": response.created_at,
+            "updated_at": response.updated_at
+        }
+    except Exception as e:
+        logger.error(f"Create appointment error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to create appointment: {str(e)}")
 
 @app.get("/appointments")
 async def get_appointments(request: Request):
-    headers = {"Authorization": request.headers.get("Authorization")}
-    return await appointment_client.get("", headers=headers)
+    token = get_token_from_header(request)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    try:
+        response = appointment_client.get_appointments(token=token)
+        return [
+            {
+                "id": appointment.id,
+                "email": appointment.email,
+                "phone_number": appointment.phone_number,
+                "appointment_time": appointment.appointment_time,
+                "vehicle_year": appointment.vehicle_year,
+                "vehicle_make": appointment.vehicle_make,
+                "vehicle_model": appointment.vehicle_model,
+                "problem_description": appointment.problem_description,
+                "status": appointment.status,
+                "created_at": appointment.created_at,
+                "updated_at": appointment.updated_at
+            }
+            for appointment in response.appointments
+        ]
+    except Exception as e:
+        logger.error(f"Get appointments error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get appointments: {str(e)}")
 
 @app.get("/appointments/{appointment_id}")
 async def get_appointment(appointment_id: int, request: Request):
-    headers = {"Authorization": request.headers.get("Authorization")}
-    return await appointment_client.get(f"{appointment_id}", headers=headers)
+    token = get_token_from_header(request)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    try:
+        response = appointment_client.get_appointment(token=token, appointment_id=appointment_id)
+        return {
+            "id": response.id,
+            "email": response.email,
+            "phone_number": response.phone_number,
+            "appointment_time": response.appointment_time,
+            "vehicle_year": response.vehicle_year,
+            "vehicle_make": response.vehicle_make,
+            "vehicle_model": response.vehicle_model,
+            "problem_description": response.problem_description,
+            "status": response.status,
+            "created_at": response.created_at,
+            "updated_at": response.updated_at
+        }
+    except Exception as e:
+        logger.error(f"Get appointment error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get appointment: {str(e)}")
 
 @app.put("/appointments/{appointment_id}")
 async def update_appointment(appointment_id: int, request: Request):
+    token = get_token_from_header(request)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
     data = await request.json()
-    headers = {"Authorization": request.headers.get("Authorization")}
-    return await appointment_client.put(f"{appointment_id}", data=data, headers=headers)
+    try:
+        response = appointment_client.update_appointment(token=token, appointment_id=appointment_id, data=data)
+        return {
+            "id": response.id,
+            "email": response.email,
+            "phone_number": response.phone_number,
+            "appointment_time": response.appointment_time,
+            "vehicle_year": response.vehicle_year,
+            "vehicle_make": response.vehicle_make,
+            "vehicle_model": response.vehicle_model,
+            "problem_description": response.problem_description,
+            "status": response.status,
+            "created_at": response.created_at,
+            "updated_at": response.updated_at
+        }
+    except Exception as e:
+        logger.error(f"Update appointment error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to update appointment: {str(e)}")
 
 @app.delete("/appointments/{appointment_id}")
 async def delete_appointment(appointment_id: int, request: Request):
-    headers = {"Authorization": request.headers.get("Authorization")}
-    return await appointment_client.delete(f"{appointment_id}", headers=headers)
+    token = get_token_from_header(request)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    try:
+        response = appointment_client.delete_appointment(token=token, appointment_id=appointment_id)
+        return {
+            "success": response.success,
+            "message": response.message
+        }
+    except Exception as e:
+        logger.error(f"Delete appointment error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete appointment: {str(e)}")
 
 # Notification service routes (admin only)
 @app.post("/notifications")
 async def send_notification(request: Request):
+    token = get_token_from_header(request)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
     data = await request.json()
-    headers = {"Authorization": request.headers.get("Authorization")}
-    return await notification_client.post("", data=data, headers=headers)
+    try:
+        response = notification_client.send_notification(token=token, data=data)
+        return {
+            "id": response.id,
+            "recipient": response.recipient,
+            "notification_type": response.notification_type,
+            "subject": response.subject,
+            "content": response.content,
+            "notification_metadata": dict(response.notification_metadata),
+            "status": response.status,
+            "created_at": response.created_at,
+            "updated_at": response.updated_at
+        }
+    except Exception as e:
+        logger.error(f"Send notification error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to send notification: {str(e)}")
 
 @app.get("/notifications")
 async def get_notifications(request: Request):
-    headers = {"Authorization": request.headers.get("Authorization")}
-    return await notification_client.get("", headers=headers)
+    token = get_token_from_header(request)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    try:
+        response = notification_client.get_notifications(token=token)
+        return [
+            {
+                "id": notification.id,
+                "recipient": notification.recipient,
+                "notification_type": notification.notification_type,
+                "subject": notification.subject,
+                "content": notification.content,
+                "notification_metadata": dict(notification.notification_metadata),
+                "status": notification.status,
+                "created_at": notification.created_at,
+                "updated_at": notification.updated_at
+            }
+            for notification in response.notifications
+        ]
+    except Exception as e:
+        logger.error(f"Get notifications error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get notifications: {str(e)}")
 
 # Error handling
 @app.exception_handler(HTTPException)

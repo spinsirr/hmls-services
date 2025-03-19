@@ -15,6 +15,10 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from contextlib import asynccontextmanager
+import grpc
+import grpc.aio
+from concurrent import futures
+from common.proto import notification_pb2, notification_pb2_grpc
 
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -23,7 +27,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.utils.config import BaseServiceSettings
 from common.utils import get_settings, init_redis, close_redis, init_db
 from common.utils import get_db_session, get_cached_data, set_cached_data, clear_cached_data
-from common.utils import AuthServiceClient
+from common.utils import AuthGrpcClient
 from common.utils import NotificationQueue
 from common.models import Notification, NotificationCreate, NotificationUpdate, NotificationResponse, NotificationBatch
 from common.models import NotificationType, NotificationStatus
@@ -37,6 +41,7 @@ class NotificationServiceSettings(BaseServiceSettings):
     SMTP_PASSWORD: str = ""
     SMTP_FROM_EMAIL: str = "notifications@example.com"
     SMS_API_KEY: str = ""
+    GRPC_PORT: int = 50053
 
 settings = get_settings(NotificationServiceSettings)
 
@@ -45,7 +50,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("notification-service")
 
 # Initialize clients
-auth_client = AuthServiceClient()
+auth_client = AuthGrpcClient()
 
 # Initialize queue
 notification_queue = NotificationQueue()
@@ -58,14 +63,21 @@ async def lifespan(app: FastAPI):
     await init_db()
     # Start notification worker in background
     worker_task = asyncio.create_task(notification_worker())
+    # Start gRPC server in background
+    grpc_task = asyncio.create_task(serve_grpc())
     logger.info(f"{settings.SERVICE_NAME} started")
     yield
     # Shutdown: Cancel worker and close Redis connection
     worker_task.cancel()
+    grpc_task.cancel()
     try:
         await worker_task
     except asyncio.CancelledError:
         logger.info("Notification worker cancelled")
+    try:
+        await grpc_task
+    except asyncio.CancelledError:
+        logger.info("gRPC server cancelled")
     await close_redis()
     logger.info(f"{settings.SERVICE_NAME} shut down")
 
@@ -102,8 +114,18 @@ async def get_current_user(request: Request):
         )
     
     try:
-        # Validate token with Auth Service
-        user_data = await auth_client.post("validate-token", headers={"Authorization": auth_header})
+        # Extract token
+        token = auth_header.replace("Bearer ", "") if auth_header.startswith("Bearer ") else auth_header
+        
+        # Validate token with Auth Service using gRPC
+        user_data = await validate_token(token)
+        if not user_data:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
         return user_data
     except Exception as e:
         raise HTTPException(
@@ -111,6 +133,24 @@ async def get_current_user(request: Request):
             detail="Invalid authentication credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+# Helper function to validate token for gRPC
+async def validate_token(token: str) -> Optional[Dict[str, Any]]:
+    """Validate a token using the gRPC auth service"""
+    try:
+        # Get user from token
+        user_response = auth_client.get_current_user(token=token)
+        
+        # Convert to dict
+        return {
+            "valid": True,
+            "user_id": user_response.id,
+            "email": user_response.email,
+            "is_admin": user_response.is_admin
+        }
+    except Exception as e:
+        logger.error(f"Token validation error: {str(e)}")
+        return None
 
 # Background worker for processing notification queue
 async def notification_worker():
@@ -357,6 +397,130 @@ async def get_notification(
     
     return notification
 
+# gRPC Service Implementation
+class NotificationServiceServicer(notification_pb2_grpc.NotificationServiceServicer):
+    async def SendNotification(self, request, context):
+        try:
+            # Validate token
+            token = request.token
+            user_data = await validate_token(token)
+            if not user_data:
+                context.set_code(grpc.StatusCode.UNAUTHENTICATED)
+                context.set_details("Invalid authentication token")
+                return notification_pb2.NotificationResponse()
+            
+            # Check if user is admin
+            if not user_data.get("is_admin", False):
+                context.set_code(grpc.StatusCode.PERMISSION_DENIED)
+                context.set_details("Only admins can send notifications")
+                return notification_pb2.NotificationResponse()
+            
+            # Create notification data
+            notification_data = {
+                "recipient": request.recipient,
+                "notification_type": request.notification_type,
+                "subject": request.subject,
+                "content": request.content,
+                "notification_metadata": dict(request.notification_metadata),
+                "status": "pending"
+            }
+            
+            # Add to queue
+            await notification_queue.add(notification_data)
+            
+            # Create notification in database
+            async with get_db_session() as db:
+                new_notification = Notification(
+                    recipient=request.recipient,
+                    notification_type=request.notification_type,
+                    subject=request.subject,
+                    content=request.content,
+                    notification_metadata=dict(request.notification_metadata),
+                    status="pending"
+                )
+                
+                db.add(new_notification)
+                await db.commit()
+                await db.refresh(new_notification)
+                
+                # Convert to response
+                return notification_pb2.NotificationResponse(
+                    id=new_notification.id,
+                    recipient=new_notification.recipient,
+                    notification_type=new_notification.notification_type,
+                    subject=new_notification.subject,
+                    content=new_notification.content,
+                    notification_metadata=new_notification.notification_metadata,
+                    status=new_notification.status,
+                    created_at=new_notification.created_at.isoformat(),
+                    updated_at=new_notification.updated_at.isoformat()
+                )
+        except Exception as e:
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Internal error: {str(e)}")
+            return notification_pb2.NotificationResponse()
+    
+    async def GetNotifications(self, request, context):
+        try:
+            # Validate token
+            token = request.token
+            user_data = await validate_token(token)
+            if not user_data:
+                context.set_code(grpc.StatusCode.UNAUTHENTICATED)
+                context.set_details("Invalid authentication token")
+                return notification_pb2.NotificationsResponse()
+            
+            # Check if user is admin
+            if not user_data.get("is_admin", False):
+                context.set_code(grpc.StatusCode.PERMISSION_DENIED)
+                context.set_details("Only admins can view all notifications")
+                return notification_pb2.NotificationsResponse()
+            
+            # Get notifications from database
+            async with get_db_session() as db:
+                stmt = select(Notification).order_by(Notification.created_at.desc())
+                result = await db.execute(stmt)
+                notifications = result.scalars().all()
+                
+                # Convert to response
+                notification_responses = []
+                for notification in notifications:
+                    notification_responses.append(notification_pb2.NotificationResponse(
+                        id=notification.id,
+                        recipient=notification.recipient,
+                        notification_type=notification.notification_type,
+                        subject=notification.subject,
+                        content=notification.content,
+                        notification_metadata=notification.notification_metadata,
+                        status=notification.status,
+                        created_at=notification.created_at.isoformat(),
+                        updated_at=notification.updated_at.isoformat()
+                    ))
+                
+                return notification_pb2.NotificationsResponse(
+                    notifications=notification_responses
+                )
+        except Exception as e:
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Internal error: {str(e)}")
+            return notification_pb2.NotificationsResponse()
+
+# Start gRPC server
+async def serve_grpc():
+    server = grpc.aio.server(futures.ThreadPoolExecutor(max_workers=10))
+    notification_pb2_grpc.add_NotificationServiceServicer_to_server(NotificationServiceServicer(), server)
+    listen_addr = f'[::]:{settings.GRPC_PORT}'
+    server.add_insecure_port(listen_addr)
+    logger.info(f"Starting gRPC server on {listen_addr}")
+    await server.start()
+    await server.wait_for_termination()
+
+# Start both FastAPI and gRPC servers
 if __name__ == "__main__":
     import uvicorn
+    
+    # Start gRPC server in a separate thread
+    asyncio.create_task(serve_grpc())
+    
+    # Start FastAPI server
     uvicorn.run("main:app", host="0.0.0.0", port=8003, reload=True) 

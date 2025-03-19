@@ -91,6 +91,10 @@ class MessageQueue:
         except Exception as e:
             print(f"Error in requeue_failed: {e}")
             return 0
+            
+    async def add(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        """Alias for enqueue method to maintain compatibility with existing code"""
+        return await self.enqueue(message)
 
 # Predefined queues for different services
 class AppointmentQueue(MessageQueue):

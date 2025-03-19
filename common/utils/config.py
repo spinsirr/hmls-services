@@ -48,10 +48,15 @@ class BaseServiceSettings(BaseSettings):
     API_TIMEOUT: int = 30  # 30 seconds
     API_MAX_CONNECTIONS: int = 100
     
-    # Service URLs
+    # Service URLs (HTTP)
     AUTH_SERVICE_URL: Optional[str] = None
     APPOINTMENT_SERVICE_URL: Optional[str] = None
     NOTIFICATION_SERVICE_URL: Optional[str] = None
+    
+    # Service URLs (gRPC)
+    AUTH_SERVICE_GRPC_URL: Optional[str] = None
+    APPOINTMENT_SERVICE_GRPC_URL: Optional[str] = None
+    NOTIFICATION_SERVICE_GRPC_URL: Optional[str] = None
     
     class Config:
         env_file = ".env"

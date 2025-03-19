@@ -12,6 +12,10 @@ from datetime import datetime, timedelta
 import pytz
 import asyncio
 from contextlib import asynccontextmanager
+import grpc
+import grpc.aio
+from concurrent import futures
+from common.proto import appointment_pb2, appointment_pb2_grpc
 
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -20,7 +24,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.utils.config import BaseServiceSettings
 from common.utils import get_settings, init_redis, close_redis, init_db
 from common.utils import get_db_session, get_cached_data, set_cached_data, clear_cached_data
-from common.utils import AuthServiceClient, NotificationServiceClient
+from common.utils import AuthGrpcClient, NotificationGrpcClient
 from common.utils import AppointmentQueue
 from common.models import Appointment, AppointmentCreate, AppointmentUpdate, AppointmentResponse, AppointmentQueueResponse
 from common.models import NotificationCreate, NotificationType
@@ -28,6 +32,7 @@ from common.models import NotificationCreate, NotificationType
 # Configure settings
 class AppointmentServiceSettings(BaseServiceSettings):
     SERVICE_NAME: str = "appointment-service"
+    GRPC_PORT: int = 50052
 
 settings = get_settings(AppointmentServiceSettings)
 
@@ -36,8 +41,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("appointment-service")
 
 # Initialize clients
-auth_client = AuthServiceClient()
-notification_client = NotificationServiceClient()
+auth_client = AuthGrpcClient()
+notification_client = NotificationGrpcClient()
 
 # Initialize queue
 appointment_queue = AppointmentQueue()
@@ -50,14 +55,21 @@ async def lifespan(app: FastAPI):
     await init_db()
     # Start appointment worker in background
     worker_task = asyncio.create_task(appointment_worker())
+    # Start gRPC server in background
+    grpc_task = asyncio.create_task(serve_grpc())
     logger.info(f"{settings.SERVICE_NAME} started")
     yield
     # Shutdown: Cancel worker and close Redis connection
     worker_task.cancel()
+    grpc_task.cancel()
     try:
         await worker_task
     except asyncio.CancelledError:
         logger.info("Appointment worker cancelled")
+    try:
+        await grpc_task
+    except asyncio.CancelledError:
+        logger.info("gRPC server cancelled")
     await close_redis()
     logger.info(f"{settings.SERVICE_NAME} shut down")
 
@@ -94,8 +106,18 @@ async def get_current_user(request: Request):
         )
     
     try:
-        # Validate token with Auth Service
-        user_data = await auth_client.post("validate-token", headers={"Authorization": auth_header})
+        # Extract token
+        token = auth_header.replace("Bearer ", "") if auth_header.startswith("Bearer ") else auth_header
+        
+        # Validate token with Auth Service using gRPC
+        user_data = await validate_token(token)
+        if not user_data:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
         return user_data
     except Exception as e:
         raise HTTPException(
@@ -103,6 +125,24 @@ async def get_current_user(request: Request):
             detail="Invalid authentication credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+# Helper function to validate token for gRPC
+async def validate_token(token: str) -> Optional[Dict[str, Any]]:
+    """Validate a token using the gRPC auth service"""
+    try:
+        # Get user from token
+        user_response = auth_client.get_current_user(token=token)
+        
+        # Convert to dict
+        return {
+            "valid": True,
+            "user_id": user_response.id,
+            "email": user_response.email,
+            "is_admin": user_response.is_admin
+        }
+    except Exception as e:
+        logger.error(f"Token validation error: {str(e)}")
+        return None
 
 # Check if appointment time is available
 async def is_time_slot_available(db: AsyncSession, appointment_time: datetime, exclude_id: int = None) -> bool:
@@ -221,7 +261,7 @@ async def appointment_worker():
                         email=message.get("email"),
                         phone_number=message.get("phone_number"),
                         appointment_time=appointment_time,
-                        vehicle_year=message.get("vehicle_year"),
+                        vehicle_year=str(message.get("vehicle_year")),
                         vehicle_make=message.get("vehicle_make"),
                         vehicle_model=message.get("vehicle_model"),
                         problem_description=message.get("problem_description"),
@@ -259,7 +299,18 @@ async def send_appointment_notification(recipient: str, subject: str, content: s
             notification_metadata=metadata or {}
         )
         
-        await notification_client.post("", data=notification.dict())
+        # Use gRPC client to send notification
+        notification_data = {
+            "recipient": recipient,
+            "notification_type": NotificationType.EMAIL,
+            "subject": subject,
+            "content": content,
+            "notification_metadata": metadata or {}
+        }
+        
+        # Get admin token (this would need to be implemented properly in a real system)
+        # For now, we'll use a direct call without a token since this is service-to-service
+        notification_client.send_notification(token="service_token", data=notification_data)
     except Exception as e:
         logger.error(f"Error sending notification: {e}")
 
@@ -276,7 +327,7 @@ async def create_appointment(
         email=appointment.email,
         phone_number=appointment.phone_number,
         appointment_time=appointment.appointment_time,
-        vehicle_year=appointment.vehicle_year,
+        vehicle_year=str(appointment.vehicle_year),
         vehicle_make=appointment.vehicle_make,
         vehicle_model=appointment.vehicle_model,
         problem_description=appointment.problem_description,
@@ -438,6 +489,305 @@ async def cancel_appointment(
     
     return queue_response
 
+# gRPC Service Implementation
+class AppointmentServiceServicer(appointment_pb2_grpc.AppointmentServiceServicer):
+    async def CreateAppointment(self, request, context):
+        try:
+            # Validate token
+            token = request.token
+            user_data = await validate_token(token)
+            if not user_data:
+                context.set_code(grpc.StatusCode.UNAUTHENTICATED)
+                context.set_details("Invalid authentication token")
+                return appointment_pb2.AppointmentResponse()
+            
+            # Create appointment data
+            appointment_data = {
+                "email": request.email,
+                "phone_number": request.phone_number,
+                "appointment_time": request.appointment_time,
+                "vehicle_year": request.vehicle_year,
+                "vehicle_make": request.vehicle_make,
+                "vehicle_model": request.vehicle_model,
+                "problem_description": request.problem_description,
+                "status": "pending"
+            }
+            
+            # Add to queue
+            await appointment_queue.add(appointment_data)
+            
+            # Create appointment in database
+            async with get_db_session() as db:
+                appointment_time = datetime.fromisoformat(request.appointment_time)
+                
+                # Check if time slot is available
+                is_available = await is_time_slot_available(db, appointment_time)
+                if not is_available:
+                    context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                    context.set_details("Time slot not available")
+                    return appointment_pb2.AppointmentResponse()
+                
+                # Create appointment
+                new_appointment = Appointment(
+                    email=request.email,
+                    phone_number=request.phone_number,
+                    appointment_time=appointment_time,
+                    vehicle_year=str(request.vehicle_year),
+                    vehicle_make=request.vehicle_make,
+                    vehicle_model=request.vehicle_model,
+                    problem_description=request.problem_description,
+                    status="pending"
+                )
+                
+                db.add(new_appointment)
+                await db.commit()
+                await db.refresh(new_appointment)
+                
+                # Convert to response
+                return appointment_pb2.AppointmentResponse(
+                    id=new_appointment.id,
+                    email=new_appointment.email,
+                    phone_number=new_appointment.phone_number,
+                    appointment_time=new_appointment.appointment_time.isoformat(),
+                    vehicle_year=int(new_appointment.vehicle_year),
+                    vehicle_make=new_appointment.vehicle_make,
+                    vehicle_model=new_appointment.vehicle_model,
+                    problem_description=new_appointment.problem_description,
+                    status=new_appointment.status,
+                    created_at=new_appointment.created_at.isoformat(),
+                    updated_at=new_appointment.updated_at.isoformat() if new_appointment.updated_at else ""
+                )
+        except Exception as e:
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Internal error: {str(e)}")
+            return appointment_pb2.AppointmentResponse()
+    
+    async def GetAppointments(self, request, context):
+        try:
+            # Validate token
+            token = request.token
+            user_data = await validate_token(token)
+            if not user_data:
+                context.set_code(grpc.StatusCode.UNAUTHENTICATED)
+                context.set_details("Invalid authentication token")
+                return appointment_pb2.AppointmentsResponse()
+            
+            # Get appointments from database
+            async with get_db_session() as db:
+                if user_data.get("is_admin", False):
+                    # Admin can see all appointments
+                    stmt = select(Appointment).order_by(Appointment.appointment_time.desc())
+                else:
+                    # Regular users can only see their own appointments
+                    stmt = select(Appointment).where(
+                        Appointment.email == user_data.get("email")
+                    ).order_by(Appointment.appointment_time.desc())
+                
+                result = await db.execute(stmt)
+                appointments = result.scalars().all()
+                
+                # Convert to response
+                appointment_responses = []
+                for appointment in appointments:
+                    appointment_responses.append(appointment_pb2.AppointmentResponse(
+                        id=appointment.id,
+                        email=appointment.email,
+                        phone_number=appointment.phone_number,
+                        appointment_time=appointment.appointment_time.isoformat(),
+                        vehicle_year=int(appointment.vehicle_year),
+                        vehicle_make=appointment.vehicle_make,
+                        vehicle_model=appointment.vehicle_model,
+                        problem_description=appointment.problem_description,
+                        status=appointment.status,
+                        created_at=appointment.created_at.isoformat(),
+                        updated_at=appointment.updated_at.isoformat() if appointment.updated_at else ""
+                    ))
+                
+                return appointment_pb2.AppointmentsResponse(
+                    appointments=appointment_responses
+                )
+        except Exception as e:
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Internal error: {str(e)}")
+            return appointment_pb2.AppointmentsResponse()
+    
+    async def GetAppointment(self, request, context):
+        try:
+            # Validate token
+            token = request.token
+            user_data = await validate_token(token)
+            if not user_data:
+                context.set_code(grpc.StatusCode.UNAUTHENTICATED)
+                context.set_details("Invalid authentication token")
+                return appointment_pb2.AppointmentResponse()
+            
+            # Get appointment from database
+            async with get_db_session() as db:
+                stmt = select(Appointment).where(Appointment.id == request.id)
+                result = await db.execute(stmt)
+                appointment = result.scalar_one_or_none()
+                
+                if not appointment:
+                    context.set_code(grpc.StatusCode.NOT_FOUND)
+                    context.set_details("Appointment not found")
+                    return appointment_pb2.AppointmentResponse()
+                
+                # Check if user has permission to view this appointment
+                if not user_data.get("is_admin", False) and appointment.email != user_data.get("email"):
+                    context.set_code(grpc.StatusCode.PERMISSION_DENIED)
+                    context.set_details("Not authorized to view this appointment")
+                    return appointment_pb2.AppointmentResponse()
+                
+                # Convert to response
+                return appointment_pb2.AppointmentResponse(
+                    id=appointment.id,
+                    email=appointment.email,
+                    phone_number=appointment.phone_number,
+                    appointment_time=appointment.appointment_time.isoformat(),
+                    vehicle_year=int(appointment.vehicle_year),
+                    vehicle_make=appointment.vehicle_make,
+                    vehicle_model=appointment.vehicle_model,
+                    problem_description=appointment.problem_description,
+                    status=appointment.status,
+                    created_at=appointment.created_at.isoformat(),
+                    updated_at=appointment.updated_at.isoformat() if appointment.updated_at else ""
+                )
+        except Exception as e:
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Internal error: {str(e)}")
+            return appointment_pb2.AppointmentResponse()
+    
+    async def UpdateAppointment(self, request, context):
+        try:
+            # Validate token
+            token = request.token
+            user_data = await validate_token(token)
+            if not user_data:
+                context.set_code(grpc.StatusCode.UNAUTHENTICATED)
+                context.set_details("Invalid authentication token")
+                return appointment_pb2.AppointmentResponse()
+            
+            # Get appointment from database
+            async with get_db_session() as db:
+                stmt = select(Appointment).where(Appointment.id == request.id)
+                result = await db.execute(stmt)
+                appointment = result.scalar_one_or_none()
+                
+                if not appointment:
+                    context.set_code(grpc.StatusCode.NOT_FOUND)
+                    context.set_details("Appointment not found")
+                    return appointment_pb2.AppointmentResponse()
+                
+                # Check if user has permission to update this appointment
+                if not user_data.get("is_admin", False) and appointment.email != user_data.get("email"):
+                    context.set_code(grpc.StatusCode.PERMISSION_DENIED)
+                    context.set_details("Not authorized to update this appointment")
+                    return appointment_pb2.AppointmentResponse()
+                
+                # Update appointment fields
+                if request.email:
+                    appointment.email = request.email
+                if request.phone_number:
+                    appointment.phone_number = request.phone_number
+                if request.appointment_time:
+                    appointment_time = datetime.fromisoformat(request.appointment_time)
+                    # Check if time slot is available
+                    is_available = await is_time_slot_available(db, appointment_time, appointment.id)
+                    if not is_available:
+                        context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                        context.set_details("Time slot not available")
+                        return appointment_pb2.AppointmentResponse()
+                    appointment.appointment_time = appointment_time
+                if request.vehicle_year:
+                    appointment.vehicle_year = str(request.vehicle_year)
+                if request.vehicle_make:
+                    appointment.vehicle_make = request.vehicle_make
+                if request.vehicle_model:
+                    appointment.vehicle_model = request.vehicle_model
+                if request.problem_description:
+                    appointment.problem_description = request.problem_description
+                if request.status:
+                    appointment.status = request.status
+                
+                await db.commit()
+                await db.refresh(appointment)
+                
+                # Convert to response
+                return appointment_pb2.AppointmentResponse(
+                    id=appointment.id,
+                    email=appointment.email,
+                    phone_number=appointment.phone_number,
+                    appointment_time=appointment.appointment_time.isoformat(),
+                    vehicle_year=int(appointment.vehicle_year),
+                    vehicle_make=appointment.vehicle_make,
+                    vehicle_model=appointment.vehicle_model,
+                    problem_description=appointment.problem_description,
+                    status=appointment.status,
+                    created_at=appointment.created_at.isoformat(),
+                    updated_at=appointment.updated_at.isoformat() if appointment.updated_at else ""
+                )
+        except Exception as e:
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Internal error: {str(e)}")
+            return appointment_pb2.AppointmentResponse()
+    
+    async def DeleteAppointment(self, request, context):
+        try:
+            # Validate token
+            token = request.token
+            user_data = await validate_token(token)
+            if not user_data:
+                context.set_code(grpc.StatusCode.UNAUTHENTICATED)
+                context.set_details("Invalid authentication token")
+                return appointment_pb2.StatusResponse()
+            
+            # Get appointment from database
+            async with get_db_session() as db:
+                stmt = select(Appointment).where(Appointment.id == request.id)
+                result = await db.execute(stmt)
+                appointment = result.scalar_one_or_none()
+                
+                if not appointment:
+                    context.set_code(grpc.StatusCode.NOT_FOUND)
+                    context.set_details("Appointment not found")
+                    return appointment_pb2.StatusResponse()
+                
+                # Check if user has permission to delete this appointment
+                if not user_data.get("is_admin", False) and appointment.email != user_data.get("email"):
+                    context.set_code(grpc.StatusCode.PERMISSION_DENIED)
+                    context.set_details("Not authorized to delete this appointment")
+                    return appointment_pb2.StatusResponse()
+                
+                # Delete appointment
+                await db.delete(appointment)
+                await db.commit()
+                
+                # Return success response
+                return appointment_pb2.StatusResponse(
+                    success=True,
+                    message=f"Appointment {request.id} deleted successfully"
+                )
+        except Exception as e:
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Internal error: {str(e)}")
+            return appointment_pb2.StatusResponse(success=False, message=str(e))
+
+# Start gRPC server
+async def serve_grpc():
+    server = grpc.aio.server(futures.ThreadPoolExecutor(max_workers=10))
+    appointment_pb2_grpc.add_AppointmentServiceServicer_to_server(AppointmentServiceServicer(), server)
+    listen_addr = f'[::]:{settings.GRPC_PORT}'
+    server.add_insecure_port(listen_addr)
+    logger.info(f"Starting gRPC server on {listen_addr}")
+    await server.start()
+    await server.wait_for_termination()
+
+# Start both FastAPI and gRPC servers
 if __name__ == "__main__":
     import uvicorn
+    
+    # Start gRPC server in a separate thread
+    asyncio.create_task(serve_grpc())
+    
+    # Start FastAPI server
     uvicorn.run("main:app", host="0.0.0.0", port=8002, reload=True) 
